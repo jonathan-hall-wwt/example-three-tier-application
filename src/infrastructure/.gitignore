@@ -1,5 +1,5 @@
 .terraform/
-.terraform.lock.hcl
+# .terraform.lock.hcl is intentionally tracked so CI uses pinned provider versions
 terraform.tfstate
 terraform.tfstate.backup
 terraform.tfvars

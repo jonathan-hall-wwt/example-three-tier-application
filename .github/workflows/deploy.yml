@@ -21,47 +21,49 @@ env:
   APP_NAME: todo
 
 jobs:
-  # ── Build ────────────────────────────────────────────────────────────────────
+  # ── Build & push container images ────────────────────────────────────────────
 
   build:
     name: Build & Push Images
     runs-on: ubuntu-latest
     environment: ${{ github.event.inputs.environment || 'dev' }}
 
-    outputs:
-      api_image: ${{ steps.meta.outputs.api_image }}
-      web_image: ${{ steps.meta.outputs.web_image }}
-      db_image: ${{ steps.meta.outputs.db_image }}
-
     permissions:
       contents: read
       id-token: write
+
+    outputs:
+      env:       ${{ steps.vars.outputs.env }}
+      api_image: ${{ steps.vars.outputs.api_image }}
+      web_image: ${{ steps.vars.outputs.web_image }}
+      db_image:  ${{ steps.vars.outputs.db_image }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Authenticate to Google Cloud
-        id: auth
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
       - name: Configure Docker for GCR
         run: gcloud auth configure-docker gcr.io --quiet
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Compute image tags
-        id: meta
+        id: vars
         run: |
-          PROJECT=${{ secrets.GCP_PROJECT_ID }}
-          SHA=${{ github.sha }}
-          echo "api_image=gcr.io/${PROJECT}/api:${SHA}"   >> "$GITHUB_OUTPUT"
-          echo "web_image=gcr.io/${PROJECT}/web:${SHA}"   >> "$GITHUB_OUTPUT"
-          echo "db_image=gcr.io/${PROJECT}/db:${SHA}"     >> "$GITHUB_OUTPUT"
+          ENV="${{ github.event.inputs.environment || 'dev' }}"
+          PROJECT="${{ secrets.GCP_PROJECT_ID }}"
+          SHA="${{ github.sha }}"
+          echo "env=${ENV}"                                      >> "$GITHUB_OUTPUT"
+          echo "api_image=gcr.io/${PROJECT}/api:${SHA}"         >> "$GITHUB_OUTPUT"
+          echo "web_image=gcr.io/${PROJECT}/web:${SHA}"         >> "$GITHUB_OUTPUT"
+          echo "db_image=gcr.io/${PROJECT}/db:${SHA}"           >> "$GITHUB_OUTPUT"
 
       - name: Build & push API
         uses: docker/build-push-action@v6
@@ -69,7 +71,7 @@ jobs:
           context: src/api
           push: true
           tags: |
-            ${{ steps.meta.outputs.api_image }}
+            ${{ steps.vars.outputs.api_image }}
             gcr.io/${{ secrets.GCP_PROJECT_ID }}/api:latest
           cache-from: type=registry,ref=gcr.io/${{ secrets.GCP_PROJECT_ID }}/api:cache
           cache-to:   type=registry,ref=gcr.io/${{ secrets.GCP_PROJECT_ID }}/api:cache,mode=max
@@ -80,29 +82,29 @@ jobs:
           context: src/web
           push: true
           tags: |
-            ${{ steps.meta.outputs.web_image }}
+            ${{ steps.vars.outputs.web_image }}
             gcr.io/${{ secrets.GCP_PROJECT_ID }}/web:latest
           cache-from: type=registry,ref=gcr.io/${{ secrets.GCP_PROJECT_ID }}/web:cache
           cache-to:   type=registry,ref=gcr.io/${{ secrets.GCP_PROJECT_ID }}/web:cache,mode=max
 
-      - name: Build & push DB (migrations)
+      - name: Build & push DB migrations
         uses: docker/build-push-action@v6
         with:
           context: src/db
           push: true
           tags: |
-            ${{ steps.meta.outputs.db_image }}
+            ${{ steps.vars.outputs.db_image }}
             gcr.io/${{ secrets.GCP_PROJECT_ID }}/db:latest
           cache-from: type=registry,ref=gcr.io/${{ secrets.GCP_PROJECT_ID }}/db:cache
           cache-to:   type=registry,ref=gcr.io/${{ secrets.GCP_PROJECT_ID }}/db:cache,mode=max
 
-  # ── Terraform ────────────────────────────────────────────────────────────────
+  # ── Provision / update infrastructure ────────────────────────────────────────
 
   infrastructure:
     name: Terraform Apply
     runs-on: ubuntu-latest
     needs: build
-    environment: ${{ github.event.inputs.environment || 'dev' }}
+    environment: ${{ needs.build.outputs.env }}
 
     permissions:
       contents: read
@@ -131,7 +133,7 @@ jobs:
         run: |
           terraform init \
             -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
-            -backend-config="prefix=terraform/${{ github.event.inputs.environment || 'dev' }}"
+            -backend-config="prefix=terraform/${{ needs.build.outputs.env }}"
 
       - name: Terraform Plan
         run: |
@@ -139,7 +141,7 @@ jobs:
             -var="project_id=${{ secrets.GCP_PROJECT_ID }}" \
             -var="region=${{ env.REGION }}" \
             -var="app_name=${{ env.APP_NAME }}" \
-            -var="environment=${{ github.event.inputs.environment || 'dev' }}" \
+            -var="environment=${{ needs.build.outputs.env }}" \
             -var="api_image=${{ needs.build.outputs.api_image }}" \
             -var="web_image=${{ needs.build.outputs.web_image }}" \
             -var="db_image=${{ needs.build.outputs.db_image }}" \
@@ -148,24 +150,13 @@ jobs:
       - name: Terraform Apply
         run: terraform apply -auto-approve tfplan
 
-      - name: Export Terraform outputs
-        id: tf_outputs
-        run: |
-          echo "job_name=$(terraform output -raw db_url_secret_id | sed 's/db-url/migrate/')" >> "$GITHUB_OUTPUT"
-          # The Cloud Run job name follows the naming convention in main.tf: {app_name}-{env}-migrate
-          ENV=${{ github.event.inputs.environment || 'dev' }}
-          echo "migration_job=${{ env.APP_NAME }}-${ENV}-migrate"  >> "$GITHUB_OUTPUT"
-
-    outputs:
-      migration_job: ${{ steps.tf_outputs.outputs.migration_job }}
-
-  # ── Database migrations ──────────────────────────────────────────────────────
+  # ── Run database migrations ───────────────────────────────────────────────────
 
   migrate:
     name: Run DB Migrations
     runs-on: ubuntu-latest
-    needs: infrastructure
-    environment: ${{ github.event.inputs.environment || 'dev' }}
+    needs: [build, infrastructure]
+    environment: ${{ needs.build.outputs.env }}
 
     permissions:
       contents: read
@@ -179,7 +170,10 @@ jobs:
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
       - name: Execute migration Cloud Run Job
+        # Job name matches the naming convention in migration.tf:
+        # "${app_name}-${environment}-migrate"
         run: |
-          gcloud run jobs execute ${{ needs.infrastructure.outputs.migration_job }} \
-            --region ${{ env.REGION }} \
+          gcloud run jobs execute \
+            "${{ env.APP_NAME }}-${{ needs.build.outputs.env }}-migrate" \
+            --region "${{ env.REGION }}" \
             --wait

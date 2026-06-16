@@ -1,5 +1,11 @@
 terraform {
   required_version = ">= 1.5"
+
+  backend "gcs" {
+    # bucket and prefix are supplied at init time via -backend-config flags
+    # so this block intentionally has no hardcoded values.
+  }
+
   required_providers {
     google = {
       source  = "hashicorp/google"
