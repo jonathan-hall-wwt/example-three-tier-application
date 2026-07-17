@@ -2,9 +2,32 @@
 
 # example-three-tier-application
 
-A reference implementation of a three-tier web application: a Next.js frontend, an Express REST API, and a PostgreSQL database. It runs locally with Docker Compose and deploys to Google Cloud Platform (Cloud Run + Cloud SQL) via Terraform.
+## What is this?
 
-## Architecture
+This is a **simple to-do list application** where you can:
+- ✅ Add tasks you need to complete
+- ✅ Mark tasks as done when you finish them
+- ✅ Delete tasks you no longer need
+
+Think of it like a digital sticky note pad for keeping track of your tasks!
+
+### Why does this project exist?
+
+While the app itself is straightforward, this project is actually a **teaching example** that shows developers how to build modern web applications. It demonstrates how to connect three important pieces:
+
+1. **The part you see** (the website you interact with)
+2. **The brain** (the server that processes your requests)
+3. **The memory** (the database that remembers your tasks)
+
+This is called a "three-tier architecture" and it's how most websites and apps work behind the scenes.
+
+---
+
+## For Developers
+
+Below you'll find technical documentation for running and deploying this application.
+
+### Architecture
 
 ```
 Browser → Web (Next.js :3000) → API (Express :3001) → PostgreSQL
@@ -67,6 +90,7 @@ The API is not exposed directly, but you can reach it through the web container 
 | GET | `/tasks` | List all tasks |
 | POST | `/tasks` | Create a task (`{ "title": "..." }`) |
 | PATCH | `/tasks/:id` | Update a task (`{ "completed": true }` or `{ "title": "..." }`) |
+| DELETE | `/tasks/:id` | Delete a task |
 
 ## Project structure
 
